@@ -43,6 +43,9 @@
 
 const std = @import("std");
 
+const stdout = std.io.getStdOut().writer();
+const stderr = std.io.getStdErr().writer();
+
 const Flag = enum {
     length, // -L (default)
     count, // -c
@@ -111,10 +114,24 @@ fn readFileAsBytes(pathname: []const u8) ![]u8 {
     return bytes;
 }
 
+fn countLines(bytes: *const []u8) usize {
+    var count: usize = 0;
+    for (bytes.*) |char| {
+        if (char == '\n') {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 pub fn main() !void {
     const result = try parse_arguments();
     const pathname = result.pathname;
     const flags = result.flags;
+    const bytes = readFileAsBytes(pathname) catch |err| {
+        try stderr.print("Error reading file: {}\n", .{err});
+        return;
+    };
 
     // std.debug.print("Pathname: {s}\n", .{pathname});
     // std.debug.print("Flags: length={}, count={}, lines={}, characters={}, words={}\n", .{
@@ -125,13 +142,14 @@ pub fn main() !void {
     //     flags.words,
     // });
 
-    const stdout = std.io.getStdOut().writer();
-
     try stdout.print("  ", .{});
 
     if (flags.count) {
-        const bytes = try readFileAsBytes(pathname);
         try stdout.print("{}  ", .{bytes.len});
+    }
+
+    if (flags.lines) {
+        try stdout.print("{}  ", .{countLines(&bytes)});
     }
 
     try stdout.print("{s}", .{pathname});
