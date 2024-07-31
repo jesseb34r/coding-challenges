@@ -124,6 +124,24 @@ fn countLines(bytes: *const []u8) usize {
     return count;
 }
 
+fn countWords(bytes: *const []u8) usize {
+    var count: usize = 0;
+    var in_word = false;
+    for (bytes.*) |char| {
+        if (std.ascii.isWhitespace(char)) {
+            if (!in_word) {
+                in_word = true;
+                count += 1;
+            }
+        } else {
+            if (in_word) {
+                in_word = false;
+            }
+        }
+    }
+    return count;
+}
+
 pub fn main() !void {
     const result = try parse_arguments();
     const pathname = result.pathname;
@@ -150,6 +168,12 @@ pub fn main() !void {
 
     if (flags.lines) {
         try stdout.print("{}  ", .{countLines(&bytes)});
+    }
+
+    if (flags.characters) {}
+
+    if (flags.words) {
+        try stdout.print("{}  ", .{countWords(&bytes)});
     }
 
     try stdout.print("{s}", .{pathname});
