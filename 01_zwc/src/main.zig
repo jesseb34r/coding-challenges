@@ -116,10 +116,9 @@ fn readFileAsBytes(pathname: []const u8) ![]u8 {
 
 fn countLines(bytes: *const []u8) usize {
     var count: usize = 0;
-    for (bytes.*) |char| {
-        if (char == '\n') {
-            count += 1;
-        }
+    var tokenizer = std.mem.tokenizeSequence(u8, bytes.*, "\n");
+    while (tokenizer.next() != null) {
+        count += 1;
     }
     return count;
 }
@@ -138,6 +137,14 @@ fn countWords(bytes: *const []u8) usize {
                 in_word = false;
             }
         }
+    }
+    return count;
+}
+
+fn countCharacters(bytes: *const []u8) usize {
+    var count: usize = 0;
+    for (bytes.*) |_| {
+        count += 1;
     }
     return count;
 }
@@ -170,7 +177,9 @@ pub fn main() !void {
         try stdout.print("{}  ", .{countLines(&bytes)});
     }
 
-    if (flags.characters) {}
+    if (flags.characters) {
+        try stdout.print("{}  ", .{countCharacters(&bytes)});
+    }
 
     if (flags.words) {
         try stdout.print("{}  ", .{countWords(&bytes)});
