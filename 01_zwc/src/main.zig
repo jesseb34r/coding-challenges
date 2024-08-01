@@ -125,18 +125,9 @@ fn countLines(bytes: *const []u8) usize {
 
 fn countWords(bytes: *const []u8) usize {
     var count: usize = 0;
-    var in_word = false;
-    for (bytes.*) |char| {
-        if (std.ascii.isWhitespace(char)) {
-            if (!in_word) {
-                in_word = true;
-                count += 1;
-            }
-        } else {
-            if (in_word) {
-                in_word = false;
-            }
-        }
+    var tokenizer = std.mem.tokenizeScalar(u8, bytes.*, ' ');
+    while (tokenizer.next() != null) {
+        count += 1;
     }
     return count;
 }
