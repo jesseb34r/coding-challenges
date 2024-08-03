@@ -46,62 +46,82 @@ const std = @import("std");
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 
-const Flag = enum {
-    length, // -L (default)
-    count, // -c
-    lines, // -l
-    characters, // -m
-    words, // -w
-};
-
 const Flags = struct {
-    length: bool = false,
-    count: bool = false,
-    lines: bool = false,
-    characters: bool = false,
-    words: bool = false,
+    count: bool, // bytes in file
+    lines: bool,
+    words: bool,
+    characters: bool,
 };
 
 const ArgParseError = error{
     MissingPathname,
     InvalidFormat,
+    InvalidFlag,
 };
 
-fn parse_arguments() ArgParseError!struct { pathname: []const u8, flags: Flags } {
-    var pathname: ?[]const u8 = null;
-    var flags = Flags{};
+fn parseFlags(flags_input: []const u8) ArgParseError!Flags {
+    var flags = Flags{
+        .count = false,
+        .lines = false,
+        .words = false,
+        .characters = false,
+    };
 
-    var args = std.process.args();
-    _ = args.skip(); // skip the command statement
-
-    while (true) {
-        const current_arg = args.next();
-        if (current_arg == null) break;
-        const unwrapped_current_arg = current_arg.?;
-
-        if (unwrapped_current_arg[0] == '-') {
-            for (unwrapped_current_arg[1..]) |flag| {
-                switch (flag) {
-                    'L' => flags.length = true,
-                    'c' => flags.count = true,
-                    'l' => flags.lines = true,
-                    'm' => flags.characters = true,
-                    'w' => flags.words = true,
-                    else => std.debug.print("invalid flag\n", .{}),
-                }
-            }
-        } else {
-            pathname = unwrapped_current_arg;
-            if (args.next() != null) return ArgParseError.InvalidFormat;
-            break;
+    for (flags_input[1..]) |flag| {
+        switch (flag) {
+            'c' => {
+                flags.characters = false;
+                flags.count = true;
+            },
+            'l' => flags.lines = true,
+            'w' => flags.words = true,
+            'm' => {
+                flags.count = false;
+                flags.characters = true;
+            },
+            else => return ArgParseError.InvalidFlag,
         }
     }
 
-    if (pathname == null) return ArgParseError.MissingPathname;
+    return flags;
+}
 
-    // default to -L
-    if (!flags.length and !flags.count and !flags.lines and !flags.characters and !flags.words) flags.length = true;
-    return .{ .pathname = pathname.?, .flags = flags };
+/// Command structure should be `zwc <flags> <pathname>`
+/// flags are always preceded with a `-`
+/// initial implementation is just one flag group and one pathname
+/// final should allow any number of flag strings and handle priority and order as well as any number of
+/// pathnames and list stats for all files as well as sums
+fn parseArguments() ArgParseError!struct { pathname: []const u8, flags: Flags } {
+    var args_it = std.process.args();
+
+    const default_flags = Flags{
+        .count = true,
+        .lines = false,
+        .words = false,
+        .characters = false,
+    };
+
+    _ = args_it.skip(); // skip the command statement
+
+    const first_arg = args_it.next();
+    if (first_arg == null) {
+        return ArgParseError.MissingPathname;
+    } else if (first_arg.?[0] != '-') {
+        if (args_it.next() != null) {
+            return ArgParseError.InvalidFormat;
+        } else {
+            return .{ .pathname = first_arg.?, .flags = default_flags };
+        }
+    } else {
+        const second_arg = args_it.next();
+        if (second_arg == null) {
+            return ArgParseError.MissingPathname;
+        } else if (second_arg.?[0] == '-') {
+            return ArgParseError.InvalidFormat;
+        } else {
+            return .{ .pathname = second_arg.?, .flags = try parseFlags(first_arg.?) };
+        }
+    }
 }
 
 fn readFileAsBytes(pathname: []const u8) ![]u8 {
@@ -141,47 +161,72 @@ fn countCharacters(bytes: *const []u8) usize {
 }
 
 pub fn main() !void {
-    const result = try parse_arguments();
-    const pathname = result.pathname;
-    const flags = result.flags;
-    const bytes = readFileAsBytes(pathname) catch |err| {
+    const result = try parseArguments();
+    const bytes = readFileAsBytes(result.pathname) catch |err| {
         try stderr.print("Error reading file: {}\n", .{err});
         return;
     };
 
-    // std.debug.print("Pathname: {s}\n", .{pathname});
-    // std.debug.print("Flags: length={}, count={}, lines={}, characters={}, words={}\n", .{
-    //     flags.length,
-    //     flags.count,
-    //     flags.lines,
-    //     flags.characters,
-    //     flags.words,
-    // });
-
     try stdout.print("  ", .{});
 
-    if (flags.count) {
-        try stdout.print("{}  ", .{bytes.len});
-    }
+    if (result.flags.count) try stdout.print("{}  ", .{bytes.len});
+    if (result.flags.lines) try stdout.print("{}  ", .{countLines(&bytes)});
+    if (result.flags.words) try stdout.print("{}  ", .{countWords(&bytes)});
+    if (result.flags.characters) try stdout.print("{}  ", .{countCharacters(&bytes)});
 
-    if (flags.lines) {
-        try stdout.print("{}  ", .{countLines(&bytes)});
-    }
-
-    if (flags.characters) {
-        try stdout.print("{}  ", .{countCharacters(&bytes)});
-    }
-
-    if (flags.words) {
-        try stdout.print("{}  ", .{countWords(&bytes)});
-    }
-
-    try stdout.print("{s}", .{pathname});
+    try stdout.print("{s}", .{result.pathname});
 }
 
-// test "simple test" {
-//     var list = std.ArrayList(i32).init(std.testing.allocator);
-//     defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-//     try list.append(42);
-//     try std.testing.expectEqual(@as(i32, 42), list.pop());
-// }
+test "flags parsing" {
+    try std.testing.expect(testFlagsEqual(Flags{
+        .count = true,
+        .lines = false,
+        .words = false,
+        .characters = false,
+    }, try parseFlags("-c")));
+    try std.testing.expect(testFlagsEqual(Flags{
+        .count = true,
+        .lines = true,
+        .words = false,
+        .characters = false,
+    }, try parseFlags("-cl")));
+    try std.testing.expect(testFlagsEqual(Flags{
+        .count = true,
+        .lines = true,
+        .words = true,
+        .characters = false,
+    }, try parseFlags("-clw")));
+    try std.testing.expect(testFlagsEqual(Flags{
+        .count = false,
+        .lines = true,
+        .words = true,
+        .characters = true,
+    }, try parseFlags("-clwm")));
+    try std.testing.expect(testFlagsEqual(Flags{
+        .count = false,
+        .lines = true,
+        .words = true,
+        .characters = true,
+    }, try parseFlags("-lwm")));
+}
+
+test "args parsing" {
+    // try testParseCmdLine("zwc -w test.txt", .{ .pathname = "test.txt", .flags = Flags{ .count = false, .lines = false, .words = true, .characters = false } });
+}
+
+fn testFlagsEqual(
+    flags_a: Flags,
+    flags_b: Flags,
+) bool {
+    return flags_a.count == flags_b.count and flags_a.lines == flags_b.lines and flags_a.words == flags_b.words and flags_a.characters == flags_b.characters;
+}
+
+fn testParseCmdLine(input_cmd_line: []const u8, expected_args: struct { pathname: []const u8, flags: Flags }) !void {
+    var it = try std.process.ArgIteratorGeneral(.{}).init(std.testing.allocator, input_cmd_line);
+    defer it.deinit();
+
+    const parsed_args = try parseArguments(it.cast(std.testing.ArgIterator));
+
+    try std.testing.expectEqualStrings(expected_args.pathname, parsed_args.pathname);
+    try std.testing.expect(testFlagsEqual(expected_args.flags, parsed_args.flags));
+}
