@@ -152,12 +152,8 @@ fn countWords(bytes: *const []u8) usize {
     return count;
 }
 
-fn countCharacters(bytes: *const []u8) usize {
-    var count: usize = 0;
-    for (bytes.*) |_| {
-        count += 1;
-    }
-    return count;
+fn countCharacters(bytes: *const []u8) !usize {
+    return try std.unicode.utf8CountCodepoints(bytes.*);
 }
 
 pub fn main() !void {
@@ -172,7 +168,7 @@ pub fn main() !void {
     if (result.flags.count) try stdout.print("{}  ", .{bytes.len});
     if (result.flags.lines) try stdout.print("{}  ", .{countLines(&bytes)});
     if (result.flags.words) try stdout.print("{}  ", .{countWords(&bytes)});
-    if (result.flags.characters) try stdout.print("{}  ", .{countCharacters(&bytes)});
+    if (result.flags.characters) try stdout.print("{}  ", .{try countCharacters(&bytes)});
 
     try stdout.print("{s}", .{result.pathname});
 }
