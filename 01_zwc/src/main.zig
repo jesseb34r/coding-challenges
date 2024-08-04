@@ -55,6 +55,7 @@ const Flags = struct {
 
 const ArgParseError = error{
     MissingPathname,
+    TooManyArgs,
     InvalidFormat,
     InvalidFlag,
 };
@@ -86,52 +87,63 @@ fn parseFlags(flags_input: []const u8) ArgParseError!Flags {
     return flags;
 }
 
+const Args = struct { pathname: ?[]const u8 = null, flags: Flags = Flags{
+    .count = true,
+    .lines = true,
+    .words = true,
+    .characters = false,
+} };
+
 /// Command structure should be `zwc <flags> <pathname>`
 /// flags are always preceded with a `-`
 /// initial implementation is just one flag group and one pathname
 /// final should allow any number of flag strings and handle priority and order as well as any number of
 /// pathnames and list stats for all files as well as sums
-fn parseArguments() ArgParseError!struct { pathname: []const u8, flags: Flags } {
+fn parseArgs() ArgParseError!Args {
     var args_it = std.process.args();
+    var parsed_args = Args{};
 
-    const default_flags = Flags{
-        .count = true,
-        .lines = false,
-        .words = false,
-        .characters = false,
-    };
-
-    _ = args_it.skip(); // skip the command statement
+    // skip the command statement
+    _ = args_it.skip();
 
     const first_arg = args_it.next();
     if (first_arg == null) {
-        return ArgParseError.MissingPathname;
-    } else if (first_arg.?[0] != '-') {
-        if (args_it.next() != null) {
-            return ArgParseError.InvalidFormat;
-        } else {
-            return .{ .pathname = first_arg.?, .flags = default_flags };
-        }
+        return parsed_args;
     } else {
-        const second_arg = args_it.next();
-        if (second_arg == null) {
-            return ArgParseError.MissingPathname;
-        } else if (second_arg.?[0] == '-') {
-            return ArgParseError.InvalidFormat;
+        if (first_arg.?[0] != '-') {
+            if (args_it.next() != null) {
+                return ArgParseError.TooManyArgs;
+            } else {
+                parsed_args.pathname = first_arg.?;
+                return parsed_args;
+            }
         } else {
-            return .{ .pathname = second_arg.?, .flags = try parseFlags(first_arg.?) };
+            parsed_args.flags = try parseFlags(first_arg.?);
+        }
+    }
+
+    const second_arg = args_it.next();
+    if (second_arg == null) {
+        return parsed_args;
+    } else {
+        if (args_it.next() != null) {
+            return ArgParseError.TooManyArgs;
+        } else {
+            parsed_args.pathname = second_arg.?;
+            return parsed_args;
         }
     }
 }
 
 fn readFileAsBytes(pathname: []const u8) ![]u8 {
-    const allocator = std.heap.page_allocator;
-
     const file = try std.fs.cwd().openFile(pathname, .{});
     defer file.close();
 
-    const bytes = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
-    return bytes;
+    return try file.readToEndAlloc(std.heap.page_allocator, std.math.maxInt(usize));
+}
+
+fn readInputFromStdin() ![]u8 {
+    return try std.io.getStdIn().readToEndAlloc(std.heap.page_allocator, std.math.maxInt(usize));
 }
 
 fn countLines(bytes: *const []u8) usize {
@@ -157,11 +169,9 @@ fn countCharacters(bytes: *const []u8) !usize {
 }
 
 pub fn main() !void {
-    const result = try parseArguments();
-    const bytes = readFileAsBytes(result.pathname) catch |err| {
-        try stderr.print("Error reading file: {}\n", .{err});
-        return;
-    };
+    const result = try parseArgs();
+
+    const bytes = if (result.pathname != null) try readFileAsBytes(result.pathname.?) else try readInputFromStdin();
 
     try stdout.print("  ", .{});
 
@@ -170,7 +180,8 @@ pub fn main() !void {
     if (result.flags.words) try stdout.print("{}  ", .{countWords(&bytes)});
     if (result.flags.characters) try stdout.print("{}  ", .{try countCharacters(&bytes)});
 
-    try stdout.print("{s}", .{result.pathname});
+    const input_name = if (result.pathname != null) result.pathname.? else "stdin";
+    try stdout.print("{s}", .{input_name});
 }
 
 test "flags parsing" {
@@ -221,7 +232,7 @@ fn testParseCmdLine(input_cmd_line: []const u8, expected_args: struct { pathname
     var it = try std.process.ArgIteratorGeneral(.{}).init(std.testing.allocator, input_cmd_line);
     defer it.deinit();
 
-    const parsed_args = try parseArguments(it.cast(std.testing.ArgIterator));
+    const parsed_args = try parseArgs(it.cast(std.testing.ArgIterator));
 
     try std.testing.expectEqualStrings(expected_args.pathname, parsed_args.pathname);
     try std.testing.expect(testFlagsEqual(expected_args.flags, parsed_args.flags));
