@@ -1,46 +1,3 @@
-// DESCRIPTION
-//    The wc utility displays the number of lines, words, and bytes contained in each input file,
-//    or standard input (if no file is specified) to the standard output.  A line is defined as a
-//    string of characters delimited by a ⟨newline⟩ character.  Characters beyond the final
-//    ⟨newline⟩ character will not be included in the line count.
-//
-//    A word is defined as a string of characters delimited by white space characters.  White space
-//    characters are the set of characters for which the iswspace(3) function returns true.  If
-//    more than one input file is specified, a line of cumulative counts for all the files is
-//    displayed on a separate line after the output for the last file.
-//
-//    The following options are available:
-//
-//    --libxo
-//            Generate output via libxo(3) in a selection of different human and machine readable
-//            formats.  See xo_parse_args(3) for details on command line arguments.
-//
-//    -L      Write the length of the line containing the most bytes (default) or characters (when
-//            -m is provided) to standard output.  When more than one file argument is specified,
-//            the longest input line of all files is reported as the value of the final “total”.
-//
-//    -c      The number of bytes in each input file is written to the standard output.  This will
-//            cancel out any prior usage of the -m option.
-//
-//    -l      The number of lines in each input file is written to the standard output.
-//
-//    -m      The number of characters in each input file is written to the standard output.  If
-//            the current locale does not support multibyte characters, this is equivalent to the
-//            -c option.  This will cancel out any prior usage of the -c option.
-//
-//    -w      The number of words in each input file is written to the standard output.
-//
-//    When an option is specified, wc only reports the information requested by that option.  The
-//    order of output always takes the form of line, word, byte, and file name.  The default action
-//    is equivalent to specifying the -c, -l and -w options.
-//
-//    If no files are specified, the standard input is used and no file name is displayed.  The
-//    prompt will accept input until receiving EOF, or [^D] in most environments.
-//
-//    If wc receives a SIGINFO (see the status argument for stty(1)) signal, the interim data will
-//    be written to the standard error output in the same format as the standard completion
-//    message.
-
 const std = @import("std");
 
 fn readFileAsBytes(pathname: []const u8) ![]u8 {
@@ -54,13 +11,25 @@ fn readInputFromStdin() ![]u8 {
     return try std.io.getStdIn().readToEndAlloc(std.heap.page_allocator, std.math.maxInt(usize));
 }
 
+const StringHashContext = struct {
+    fn hasher(key: []const u8) u64 {
+        return std.hash.hash(u64, key);
+    }
+
+    fn eql(a: []const u8, b: []const u8) bool {
+        return std.mem.eql(u8, a, b);
+    }
+};
+
+const HashMap = std.ArrayHashMap([]const u8, *JsonValue, StringHashContext, true);
+
 const JsonValue = union(enum) {
     Null,
     Bool: bool,
     Number: f64,
     String: []const u8,
     Array: std.ArrayList(*JsonValue),
-    Object: std.AutoArrayHashMap([]const u8, *JsonValue),
+    Object: HashMap,
 
     pub fn equals(self: *const JsonValue, other: *const JsonValue) bool {
         return switch (self.*) {
@@ -68,15 +37,42 @@ const JsonValue = union(enum) {
                 JsonValue.Null => true,
                 else => false,
             },
-            JsonValue.Bool => |value| switch (other.*) {
-                JsonValue.Bool => |other_value| value == other_value,
+            JsonValue.Bool => switch (other.*) {
+                JsonValue.Bool => self.*.Bool == other.*.Bool,
                 else => false,
             },
-            JsonValue.Number => |value| switch (other.*) {
-                JsonValue.Number => |other_value| value == other_value,
+            JsonValue.Number => switch (other.*) {
+                JsonValue.Number => self.*.Number == other.*.Number,
                 else => false,
             },
-            else => false,
+            JsonValue.String => switch (other.*) {
+                JsonValue.String => std.mem.eql(u8, self.*.String, other.*.String),
+                else => false,
+            },
+            JsonValue.Array => switch (other.*) {
+                JsonValue.Array => array: {
+                    if (self.*.Array.items.len != other.*.Array.items.len) return false;
+                    for (self.*.Array.items, 0..) |*elem, i| {
+                        if (!elem.*.equals(other.*.Array.items[i])) return false;
+                    }
+                    break :array true;
+                },
+                else => false,
+            },
+            JsonValue.Object => switch (other.*) {
+                JsonValue.Object => object: {
+                    if (self.*.Object.count() != other.*.Object.count()) break :object false;
+
+                    var it = self.*.Object.iterator();
+                    while (it.next()) |entry| {
+                        const other_value = other.*.Object.get(entry.key_ptr.*);
+                        if (other_value == null) break :object false;
+                        if (!entry.value_ptr.*.equals(other_value.?)) break :object false;
+                    }
+                    break :object true;
+                },
+                else => false,
+            },
         };
     }
 };
